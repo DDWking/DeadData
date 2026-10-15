@@ -53,7 +53,7 @@ The app requires Android 8.0 or newer.
 The app checks:
 
 ```text
-https://api.github.com/repos/DDWking/DeadData/releases/latest
+https://github.com/DDWking/DeadData/releases/latest/download/update.json
 ```
 
 Each public release must contain:

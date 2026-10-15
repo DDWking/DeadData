@@ -3,7 +3,6 @@ package app.deaddata.mobile.update;
 import android.content.Context;
 
 import app.deaddata.mobile.BuildConfig;
-import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.BufferedInputStream;
@@ -18,33 +17,15 @@ import java.util.Locale;
 
 public final class UpdateClient {
     public static final String PREFS = "deaddata";
-    private static final String RELEASES_URL =
-            "https://api.github.com/repos/DDWking/DeadData/releases/latest";
+    private static final String MANIFEST_URL =
+            "https://github.com/DDWking/DeadData/releases/latest/download/update.json";
     private static final int MAX_APK_BYTES = 300 * 1024 * 1024;
 
     private UpdateClient() {
     }
 
     public static UpdateInfo check() throws Exception {
-        JSONObject release = new JSONObject(readUrl(RELEASES_URL, 4 * 1024 * 1024));
-        JSONArray assets = release.optJSONArray("assets");
-        if (assets == null) throw new IllegalStateException("GitHub Release 没有更新文件");
-
-        String manifestUrl = "";
-        for (int i = 0; i < assets.length(); i++) {
-            JSONObject asset = assets.optJSONObject(i);
-            if (asset == null) continue;
-            if ("update.json".equals(asset.optString("name", ""))) {
-                manifestUrl = asset.optString("browser_download_url", "").trim();
-                break;
-            }
-        }
-        if (manifestUrl.isEmpty()) {
-            throw new IllegalStateException("GitHub Release 缺少 update.json");
-        }
-
-        requireHttps(manifestUrl);
-        JSONObject manifest = new JSONObject(readUrl(manifestUrl, 1024 * 1024));
+        JSONObject manifest = new JSONObject(readUrl(MANIFEST_URL, 1024 * 1024));
         int versionCode = manifest.optInt("versionCode", -1);
         String versionName = manifest.optString("versionName", "").trim();
         String apkUrl = manifest.optString("apkUrl", "").trim();
