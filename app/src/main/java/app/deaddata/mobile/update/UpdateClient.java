@@ -25,7 +25,15 @@ public final class UpdateClient {
     }
 
     public static UpdateInfo check() throws Exception {
-        JSONObject manifest = new JSONObject(readUrl(MANIFEST_URL, 1024 * 1024));
+        UpdateInfo update = parseManifest(new JSONObject(readUrl(MANIFEST_URL, 1024 * 1024)));
+        return isNewer(update) ? update : null;
+    }
+
+    /**
+     * Parses and validates an update manifest. Anything that could point the app at
+     * a truncated or attacker controlled download is rejected here.
+     */
+    static UpdateInfo parseManifest(JSONObject manifest) {
         int versionCode = manifest.optInt("versionCode", -1);
         String versionName = manifest.optString("versionName", "").trim();
         String apkUrl = manifest.optString("apkUrl", "").trim();
@@ -36,8 +44,12 @@ public final class UpdateClient {
             throw new IllegalArgumentException("更新清单缺少有效的版本号、APK 地址或 SHA-256");
         }
         requireHttps(apkUrl);
-        if (versionCode <= BuildConfig.VERSION_CODE) return null;
         return new UpdateInfo(versionCode, versionName, apkUrl, sha256, notes);
+    }
+
+    /** True when the manifest describes a build newer than the installed one. */
+    static boolean isNewer(UpdateInfo update) {
+        return update != null && update.versionCode > BuildConfig.VERSION_CODE;
     }
 
     public static File download(Context context, UpdateInfo update, Progress progress)

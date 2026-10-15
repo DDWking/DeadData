@@ -5,8 +5,8 @@ on:
     tags:
       - "v*"
 
-  permissions:
-    contents: write
+permissions:
+  contents: write
 
 jobs:
   release:
@@ -14,12 +14,16 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@v5
+        with:
+          # Tags are needed to compare this release against the previous one.
+          fetch-depth: 0
 
       - name: Set up Java
         uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
+          cache: gradle
 
       - name: Decode release keystore
         shell: bash
@@ -38,29 +42,53 @@ jobs:
           keyPassword=$ANDROID_KEY_PASSWORD
           EOF
 
-      - name: Build signed APK
+      - name: Run unit tests
         run: |
           chmod +x gradlew
-          ./gradlew assembleRelease
+          ./gradlew testDebugUnitTest --console=plain
+
+      - name: Build signed APK
+        run: ./gradlew assembleRelease --console=plain
 
       - name: Prepare release files
         shell: bash
         run: |
+          set -euo pipefail
           VERSION_NAME=$(grep -oP 'versionName "\K[^"]+' app/build.gradle)
           VERSION_CODE=$(grep -oP 'versionCode \K[0-9]+' app/build.gradle)
           TAG="${GITHUB_REF_NAME}"
+
+          # The published manifest must describe the version users will actually get.
+          if [ "v${VERSION_NAME}" != "$TAG" ]; then
+            echo "::error::tag $TAG does not match versionName $VERSION_NAME in app/build.gradle"
+            exit 1
+          fi
+
+          PREVIOUS_TAG=$(git tag --sort=-v:refname | grep -vx "$TAG" | head -n 1 || true)
+          if [ -n "$PREVIOUS_TAG" ]; then
+            PREVIOUS_CODE=$(git show "$PREVIOUS_TAG:app/build.gradle" | grep -oP 'versionCode \K[0-9]+' || true)
+            if [ -n "$PREVIOUS_CODE" ] && [ "$VERSION_CODE" -le "$PREVIOUS_CODE" ]; then
+              echo "::error::versionCode $VERSION_CODE must be greater than $PREVIOUS_CODE from $PREVIOUS_TAG, otherwise installed apps ignore the update"
+              exit 1
+            fi
+          fi
+
           APK_NAME="DeadData-${VERSION_NAME}.apk"
           cp app/build/outputs/apk/release/app-release.apk "$APK_NAME"
-          SHA256=$(sha256sum "$APK_NAME" | cut -d' ' -f1)
           APK_URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${APK_NAME}"
-          jq -n \
-            --argjson versionCode "$VERSION_CODE" \
-            --arg versionName "$VERSION_NAME" \
-            --arg apkUrl "$APK_URL" \
-            --arg sha256 "$SHA256" \
-            --arg releaseNotes "DeadData ${VERSION_NAME}" \
-            '{versionCode:$versionCode,versionName:$versionName,apkUrl:$apkUrl,sha256:$sha256,releaseNotes:$releaseNotes}' \
-            > update.json
+
+          # One implementation builds and validates the manifest, shared with the
+          # PowerShell tool used for local releases.
+          python3 tools/release_manifest.py notes --version "$VERSION_NAME" > release-notes.md
+          python3 tools/release_manifest.py build \
+            --apk "$APK_NAME" \
+            --version-code "$VERSION_CODE" \
+            --version-name "$VERSION_NAME" \
+            --apk-url "$APK_URL" \
+            --notes-file release-notes.md \
+            --out update.json
+          python3 tools/release_manifest.py validate --manifest update.json --apk "$APK_NAME"
+
           echo "VERSION_NAME=$VERSION_NAME" >> "$GITHUB_ENV"
 
       - name: Publish GitHub Release
@@ -71,4 +99,4 @@ jobs:
             "DeadData-${VERSION_NAME}.apk" \
             update.json \
             --title "DeadData ${VERSION_NAME}" \
-            --generate-notes
+            --notes-file release-notes.md

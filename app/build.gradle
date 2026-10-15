@@ -4,6 +4,9 @@ plugins {
 
 dependencies {
     testImplementation "junit:junit:4.13.2"
+    // android.jar only ships an unmocked org.json stub, so unit tests need a real
+    // implementation to exercise AccountStore/DeadlockApi/MatchStats parsing.
+    testImplementation "org.json:json:20240303"
 }
 
 def releaseSigningFile = rootProject.file("release-signing.properties")
@@ -21,8 +24,8 @@ android {
         applicationId "app.deaddata.mobile"
         minSdk 26
         targetSdk 36
-        versionCode 9
-        versionName "1.4.0"
+        versionCode 10
+        versionName "1.4.1"
     }
 
     if (releaseSigning != null) {

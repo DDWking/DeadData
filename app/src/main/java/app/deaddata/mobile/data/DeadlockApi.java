@@ -1,11 +1,14 @@
 package app.deaddata.mobile.data;
 
+import app.deaddata.mobile.BuildConfig;
+
 import org.json.JSONArray;
 import org.json.JSONException;
 import org.json.JSONObject;
 import org.json.JSONTokener;
 
 import java.io.BufferedReader;
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
@@ -21,7 +24,34 @@ public final class DeadlockApi {
     private static final int CONNECT_TIMEOUT_MS = 10000;
     private static final int READ_TIMEOUT_MS = 15000;
 
+    /** Player data changes minute to minute, so refreshes stay cheap but fresh. */
+    private static final long RESPONSE_TTL_MS = 60L * 1000L;
+    /** Hero assets change with game patches; the disk copy outlives app restarts. */
+    private static final long ASSET_TTL_MS = 12L * 60L * 60L * 1000L;
+    private static final String HEROES_ASSET_KEY = "heroes";
+
+    private static final HttpCache RESPONSE_CACHE = new HttpCache();
+    private static volatile AssetCache assetCache;
+
     private DeadlockApi() {
+    }
+
+    /**
+     * Points the on-disk asset cache at the app cache directory. Safe to call
+     * more than once; a null directory disables the disk fallback.
+     */
+    public static void setCacheDirectory(File directory) {
+        assetCache = directory == null ? null : new AssetCache(new File(directory, "api-assets"));
+    }
+
+    /** Drops every cached response, so an explicit refresh always hits the API. */
+    public static void clearResponseCache() {
+        RESPONSE_CACHE.clear();
+    }
+
+    /** Assets are cached far longer than player data. */
+    static long cacheTtlMillis(String path) {
+        return path != null && path.startsWith("/v1/assets/") ? ASSET_TTL_MS : RESPONSE_TTL_MS;
     }
 
     public static PlayerData loadPlayer(String accountId) throws IOException, JSONException {
@@ -113,8 +143,10 @@ public final class DeadlockApi {
 
     private static Map<Integer, Hero> loadHeroes() {
         HashMap<Integer, Hero> result = new HashMap<>();
+        String body = heroesBody();
+        if (body == null || body.trim().isEmpty()) return result;
         try {
-            Object value = new JSONTokener(get("/v1/assets/heroes")).nextValue();
+            Object value = new JSONTokener(body).nextValue();
             JSONArray array = arrayFrom(value, "heroes", "data", "result");
             if (array == null) return result;
             for (int i = 0; i < array.length(); i++) {
@@ -130,6 +162,32 @@ public final class DeadlockApi {
         } catch (Exception ignored) {
         }
         return result;
+    }
+
+    /**
+     * Live hero assets, stored on disk on every successful fetch. When the
+     * network is unavailable the last successful payload is served instead, so
+     * a cold start still renders hero names and icons.
+     */
+    private static String heroesBody() {
+        try {
+            return heroesPayload(assetCache, get("/v1/assets/heroes"));
+        } catch (Exception ignored) {
+            // Fall through to the on-disk copy.
+        }
+        return heroesPayload(assetCache, null);
+    }
+
+    /**
+     * Fresh payload wins and is persisted; otherwise the on-disk copy is served
+     * no matter how old it is, because stale hero data still beats an empty UI.
+     */
+    static String heroesPayload(AssetCache cache, String liveBody) {
+        if (liveBody != null && !liveBody.trim().isEmpty()) {
+            if (cache != null) cache.write(HEROES_ASSET_KEY, liveBody);
+            return liveBody;
+        }
+        return cache == null ? null : cache.read(HEROES_ASSET_KEY, 0L);
     }
 
     private static String imageUrl(JSONObject item) {
@@ -190,13 +248,23 @@ public final class DeadlockApi {
         return null;
     }
 
+    /** Cached GET: a hit within the TTL avoids the network round trip entirely. */
     private static String get(String path) throws IOException {
+        String cached = RESPONSE_CACHE.get(path);
+        if (cached != null) return cached;
+        String body = fetch(path);
+        RESPONSE_CACHE.put(path, body, cacheTtlMillis(path));
+        return body;
+    }
+
+    private static String fetch(String path) throws IOException {
         HttpURLConnection connection = (HttpURLConnection) new URL(BASE_URL + path).openConnection();
         connection.setRequestMethod("GET");
         connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
         connection.setReadTimeout(READ_TIMEOUT_MS);
         connection.setRequestProperty("Accept", "application/json");
-        connection.setRequestProperty("User-Agent", "DeadData-Android/1.0");
+        connection.setRequestProperty("User-Agent",
+                "DeadData-Android/" + BuildConfig.VERSION_NAME);
         try {
             int status = connection.getResponseCode();
             InputStream stream = status >= 200 && status < 300

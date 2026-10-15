@@ -30,9 +30,11 @@ import android.widget.Toast;
 
 import app.deaddata.mobile.data.DeadlockApi;
 import app.deaddata.mobile.data.AccountStore;
+import app.deaddata.mobile.data.MatchStats;
 import app.deaddata.mobile.auth.SteamProfileResolver;
 import app.deaddata.mobile.update.ApkContentProvider;
 import app.deaddata.mobile.update.UpdateClient;
+import app.deaddata.mobile.update.UpdateThrottle;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -109,6 +111,7 @@ public final class MainActivity extends Activity {
         preferences.edit()
                 .putBoolean(PREF_ACCOUNT_DIRECTORY_INITIALIZED, true)
                 .apply();
+        DeadlockApi.setCacheDirectory(getCacheDir());
         getWindow().setStatusBarColor(BG);
         getWindow().setNavigationBarColor(BG);
 
@@ -585,6 +588,7 @@ public final class MainActivity extends Activity {
     }
 
     private void refreshCurrentProfile() {
+        DeadlockApi.clearResponseCache();
         String accountId = currentAccountId;
         if (accountId == null || accountId.isEmpty()) {
             AccountStore.Account account = AccountStore.selected(preferences);
@@ -719,8 +723,8 @@ public final class MainActivity extends Activity {
         for (int i = 0; i < count; i++) {
             JSONObject match = data.matches.optJSONObject(i);
             if (match == null) continue;
-            if (isWin(match)) wins++;
-            JSONObject stats = statsObject(match);
+            if (MatchStats.isWin(match)) wins++;
+            JSONObject stats = MatchStats.statsObject(match);
             kills += DeadlockApi.firstLong(stats, 0, "kills", "player_kills");
             deaths += DeadlockApi.firstLong(stats, 0, "deaths", "player_deaths");
             assists += DeadlockApi.firstLong(stats, 0, "assists", "player_assists");
@@ -819,11 +823,11 @@ public final class MainActivity extends Activity {
     }
 
     private View matchRow(JSONObject match, Map<Integer, DeadlockApi.Hero> heroes) {
-        boolean won = isWin(match);
+        boolean won = MatchStats.isWin(match);
         int heroId = DeadlockApi.firstInt(match, -1, "hero_id", "hero");
         DeadlockApi.Hero hero = heroes.get(heroId);
         String heroName = hero == null ? (heroId < 0 ? "未知英雄" : "英雄 #" + heroId) : hero.name;
-        JSONObject stats = statsObject(match);
+        JSONObject stats = MatchStats.statsObject(match);
         int kills = DeadlockApi.firstInt(stats, 0, "kills", "player_kills");
         int deaths = DeadlockApi.firstInt(stats, 0, "deaths", "player_deaths");
         int assists = DeadlockApi.firstInt(stats, 0, "assists", "player_assists");
@@ -852,7 +856,7 @@ public final class MainActivity extends Activity {
         heroText.setSingleLine(true);
         heroText.setEllipsize(android.text.TextUtils.TruncateAt.END);
         details.addView(heroText);
-        TextView meta = text(idLabel + "  ·  " + modeLabel(match)
+        TextView meta = text(idLabel + "  ·  " + MatchStats.modeLabel(match)
                 + "  ·  " + durationLabel(match) + "  ·  " + matchDate(match),
                 10, MUTED, false);
         meta.setSingleLine(true);
@@ -873,14 +877,6 @@ public final class MainActivity extends Activity {
         result.setGravity(Gravity.CENTER);
         result.setBackground(rounded(won ? LIME : CORAL, 9, 0));
         return result;
-    }
-
-    private String modeLabel(JSONObject match) {
-        int mode = DeadlockApi.firstInt(match, -1, "match_mode", "game_mode");
-        if (mode == 1) return "标准";
-        if (mode == 2) return "排位";
-        if (mode < 0) return "模式未知";
-        return "模式 " + mode;
     }
 
     private void showMatchDetails(JSONObject match, String heroName, boolean won,
@@ -937,7 +933,7 @@ public final class MainActivity extends Activity {
         message.append(won ? "胜利" : "失败").append("\n");
         message.append("英雄  ").append(heroName).append("\n");
         message.append("比赛  #").append(match.optString("match_id", "未知")).append("\n");
-        message.append("模式  ").append(modeLabel(match)).append("\n");
+        message.append("模式  ").append(MatchStats.modeLabel(match)).append("\n");
         message.append("时间  ").append(matchDate(match)).append("\n");
         message.append("时长  ").append(durationLabel(match)).append("\n");
         message.append("K / D / A  ").append(kills).append(" / ")
@@ -971,7 +967,7 @@ public final class MainActivity extends Activity {
         summary.addView(resultBadge(won), params(dp(52), dp(32)));
         LinearLayout summaryText = column(0);
         summaryText.setPadding(dp(10), 0, 0, 0);
-        summaryText.addView(text(heroName + "  ·  " + modeLabel(match),
+        summaryText.addView(text(heroName + "  ·  " + MatchStats.modeLabel(match),
                 15, TEXT, true));
         summaryText.addView(text("#" + match.optString("match_id", "未知")
                         + "  ·  " + durationLabel(info)
@@ -983,7 +979,7 @@ public final class MainActivity extends Activity {
         addDetailSection(content, "比赛概览");
         addDetailPair(content, "最终结果",
                 winningTeamLabel(info, DeadlockApi.firstInt(info, -1, "winning_team")));
-        addDetailPair(content, "比赛模式", modeLabel(match));
+        addDetailPair(content, "比赛模式", MatchStats.modeLabel(match));
         addDetailPair(content, "比赛时长", durationLabel(info));
 
         JSONArray players = info.optJSONArray("players");
@@ -1174,7 +1170,7 @@ public final class MainActivity extends Activity {
             JSONObject item = data.heroStats.optJSONObject(i);
             if (item != null) stats.add(item);
         }
-        if (stats.isEmpty()) stats = aggregateHeroStats(data.matches);
+        if (stats.isEmpty()) stats = MatchStats.aggregateHeroStats(data.matches);
         Collections.sort(stats, Comparator.comparingInt(
                 item -> -DeadlockApi.firstInt(item, 0,
                         "matches_played", "match_count", "matches", "games_played")));
@@ -1324,56 +1320,6 @@ public final class MainActivity extends Activity {
         return String.format(Locale.US, "%.1f%%", percent);
     }
 
-    private ArrayList<JSONObject> aggregateHeroStats(JSONArray matches) {
-        HashMap<Integer, JSONObject> totals = new HashMap<>();
-        for (int i = 0; i < matches.length(); i++) {
-            JSONObject match = matches.optJSONObject(i);
-            if (match == null) continue;
-            int heroId = DeadlockApi.firstInt(match, -1, "hero_id", "hero");
-            if (heroId < 0) continue;
-            JSONObject stat = totals.get(heroId);
-            if (stat == null) {
-                stat = new JSONObject();
-                try {
-                    stat.put("hero_id", heroId);
-                    stat.put("matches_played", 0);
-                    stat.put("wins", 0);
-                } catch (JSONException ignored) {
-                }
-                totals.put(heroId, stat);
-            }
-            try {
-                stat.put("matches_played", stat.optInt("matches_played") + 1);
-                if (isWin(match)) stat.put("wins", stat.optInt("wins") + 1);
-            } catch (JSONException ignored) {
-            }
-        }
-        return new ArrayList<>(totals.values());
-    }
-
-    private boolean isWin(JSONObject match) {
-        JSONObject stats = statsObject(match);
-        int playerTeam = DeadlockApi.firstInt(match, -1, "player_team", "team");
-        int matchResult = DeadlockApi.firstInt(match, -1, "match_result",
-                "winning_team", "winning_team_id");
-        if (playerTeam >= 0 && matchResult >= 0) return playerTeam == matchResult;
-        int outcome = DeadlockApi.firstInt(match, -1,
-                "player_match_outcome", "won", "player_won");
-        if (outcome == 1) return true;
-        if (outcome == 2 || outcome == 0) return false;
-        String outcomeText = DeadlockApi.firstString(match, "outcome", "result").toLowerCase(Locale.ROOT);
-        if (outcomeText.contains("win") || outcomeText.contains("victory")) return true;
-        if (outcomeText.contains("loss") || outcomeText.contains("defeat")) return false;
-        return stats.optBoolean("won", false);
-    }
-
-    private JSONObject statsObject(JSONObject match) {
-        JSONObject stats = match.optJSONObject("player_match_stats");
-        if (stats == null) stats = match.optJSONObject("player_stats");
-        if (stats == null) stats = match.optJSONObject("player");
-        return stats == null ? match : stats;
-    }
-
     private String matchDate(JSONObject match) {
         long seconds = DeadlockApi.firstLong(match, 0, "start_time", "start_timestamp");
         if (seconds == 0) return "时间未知";
@@ -1423,10 +1369,15 @@ public final class MainActivity extends Activity {
     }
 
     private void checkForUpdate(boolean manual) {
+        if (!manual && !UpdateThrottle.shouldCheck(preferences, System.currentTimeMillis(),
+                UpdateThrottle.DEFAULT_INTERVAL_MS)) {
+            return;
+        }
         if (!updateCheckRunning.compareAndSet(false, true)) return;
         io.execute(() -> {
             try {
                 UpdateClient.UpdateInfo update = UpdateClient.check();
+                UpdateThrottle.recordCheck(preferences, System.currentTimeMillis());
                 runOnUiThread(() -> {
                     if (update == null) {
                         if (manual) Toast.makeText(this, "当前已是最新版本", Toast.LENGTH_SHORT).show();

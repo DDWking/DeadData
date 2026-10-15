@@ -2,6 +2,8 @@ package app.deaddata.mobile.auth;
 
 import android.net.Uri;
 
+import app.deaddata.mobile.BuildConfig;
+
 import java.io.BufferedReader;
 import java.io.IOException;
 import java.io.InputStream;
@@ -96,7 +98,8 @@ public final class SteamProfileResolver {
             connection.setConnectTimeout(CONNECT_TIMEOUT_MS);
             connection.setReadTimeout(READ_TIMEOUT_MS);
             connection.setRequestProperty("Accept", "application/xml,text/html");
-            connection.setRequestProperty("User-Agent", "DeadData-Android/1.4");
+            connection.setRequestProperty("User-Agent",
+                    "DeadData-Android/" + BuildConfig.VERSION_NAME);
             int status = connection.getResponseCode();
             InputStream stream = status >= 200 && status < 300
                     ? connection.getInputStream() : connection.getErrorStream();
