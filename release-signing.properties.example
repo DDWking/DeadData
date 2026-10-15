@@ -1,0 +1,4 @@
+storeFile=deaddata-release.jks
+storePassword=REPLACE_WITH_YOUR_STORE_PASSWORD
+keyAlias=deaddata
+keyPassword=REPLACE_WITH_YOUR_KEY_PASSWORD

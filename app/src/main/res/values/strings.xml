@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">DeadData</string>
+    <string name="recent_win_rate">最近 20 场胜率</string>
+    <string name="loading_player">正在从 Deadlock API 获取数据…</string>
+    <string name="account_id_value">account ID  %1$s</string>
+    <string name="profile_updated">更新于 %1$s</string>
+    <string name="api_data_source">数据来源  ·  Deadlock API</string>
+    <string name="downloading_version">正在下载 %1$s…</string>
+    <string name="download_percent">更新包下载中  %1$d%%</string>
+    <string name="refresh_data">刷新战绩</string>
+    <string name="check_updates">检查应用更新</string>
+    <string name="match_details">比赛详情</string>
+</resources>
